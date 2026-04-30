@@ -183,7 +183,9 @@ def get_player_info(uid, region):
         r = requests.post(url, data=enc, headers=game_headers(token),
                          timeout=15, verify=False)
         if r.status_code == 200 and r.content:
-            return parse_player_info(r.content)
+            # Skip 4-byte header from game server response
+            raw = r.content[4:] if len(r.content) > 4 else r.content
+            return parse_player_info(raw)
     except Exception as e:
         logger.error(f"get_player_info error: {e}")
     return None
