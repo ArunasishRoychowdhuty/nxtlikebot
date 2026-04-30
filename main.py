@@ -3,11 +3,21 @@ import telebot
 import requests
 import time
 import threading
+import asyncio
+import aiohttp
+import binascii
 from datetime import datetime, timedelta
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from flask import Flask, request, jsonify
 import logging
 import sys
+
+try:
+    from Crypto.Cipher import AES
+    from Crypto.Util.Padding import pad
+except ImportError:
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Util.Padding import pad
 
 # ╔══════════════════════════════════════════════════════════════════╗
 # ║          🔥 FREE FIRE LIKE BOT — @nxtlikebot                   ║
@@ -43,9 +53,27 @@ OWNER_ID = 8026004873
 OWNER_USERNAME = "@NXT_lvl_sheb"
 
 # ─── Free Fire Like API ───────────────────────────────────────────
-# ভিডিওতে যে API URL দেওয়া আছে সেটা এখানে বসাও
-# Format: https://your-api.com/like?uid={uid}&server_name={region}
-LIKE_API_URL = "https://ff-like-api.vercel.app/like?uid={uid}&server_name={region}"
+# REAL JWT TOKENS (IND Region - auto-generated)
+FF_TOKENS = [
+    "eyJhbGciOiJIUzI1NiIsInN2ciI6IjMiLCJ0eXAiOiJKV1QifQ.eyJhY2NvdW50X2lkIjoxMjE3NDQyNzQ5Nywibmlja25hbWUiOiJaUzFnZjJackZTVWpUbE1SIiwibm90aV9yZWdpb24iOiJJTkQiLCJsb2NrX3JlZ2lvbiI6IklORCIsImV4dGVybmFsX2lkIjoiMWE3NGMyYWExMTUyODYwN2EwZTU4MWUzNzIyMGFkZGQiLCJleHRlcm5hbF90eXBlIjo0LCJwbGF0X2lkIjoxLCJjbGllbnRfdmVyc2lvbiI6IjEuMTIzLjEiLCJlbXVsYXRvcl9zY29yZSI6MTAwLCJpc19lbXVsYXRvciI6dHJ1ZSwiY291bnRyeV9jb2RlIjoiVVMiLCJleHRlcm5hbF91aWQiOjM5NDM2NTMzMTQsInJlZ19hdmF0YXIiOjEwMjAwMDAwNywic291cmNlIjowLCJsb2NrX3JlZ2lvbl90aW1lIjoxNzQ4NDY5NDcxLCJjbGllbnRfdHlwZSI6Miwic2lnbmF0dXJlX21kNSI6IiIsInVzaW5nX3ZlcnNpb24iOjAsInJlbGVhc2VfY2hhbm5lbCI6IiIsInJlbGVhc2VfdmVyc2lvbiI6Ik9CNTMiLCJleHAiOjE3Nzc1OTA3MDB9.5XCRq2a44rMHZEgJRkxwSudl-ptqr5ELORmls1w8TSA",
+    "eyJhbGciOiJIUzI1NiIsInN2ciI6IjMiLCJ0eXAiOiJKV1QifQ.eyJhY2NvdW50X2lkIjoxMTMxMzQ1ODc3NSwibmlja25hbWUiOiIzdG1DMTRXVWpOL2ExOWpDaCtHZDhJaUV1TmVtMWc9PSIsIm5vdGlfcmVnaW9uIjoiSU5EIiwibG9ja19yZWdpb24iOiJJTkQiLCJleHRlcm5hbF9pZCI6ImViMjZlYzEzMDlkMjMwMjg4NTYzOTVmMjJkNmU1ODg2IiwiZXh0ZXJuYWxfdHlwZSI6NCwicGxhdF9pZCI6MSwiY2xpZW50X3ZlcnNpb24iOiIxLjEyMy4xIiwiZW11bGF0b3Jfc2NvcmUiOjEwMCwiaXNfZW11bGF0b3IiOnRydWUsImNvdW50cnlfY29kZSI6IlVTIiwiZXh0ZXJuYWxfdWlkIjozNzkyMTA3NzE3LCJyZWdfYXZhdGFyIjoxMDIwMDAwMDcsInNvdXJjZSI6MCwibG9ja19yZWdpb25fdGltZSI6MTc0MTA0OTM3NSwiY2xpZW50X3R5cGUiOjIsInNpZ25hdHVyZV9tZDUiOiIiLCJ1c2luZ192ZXJzaW9uIjowLCJyZWxlYXNlX2NoYW5uZWwiOiIiLCJyZWxlYXNlX3ZlcnNpb24iOiJPQjUzIiwiZXhwIjoxNzc3NTkwNzA1fQ.7nEl_DzHmiZkQCKLok6MhtkVuuLyDfKJKHTruc30p3I",
+]
+
+# Game server URLs per region
+GAME_SERVERS = {
+    "IND": "https://client.ind.freefiremobile.com",
+    "BD":  "https://clientbp.ggpolarbear.com",
+    "SG":  "https://clientbp.ggpolarbear.com",
+    "ID":  "https://clientbp.ggpolarbear.com",
+    "TW":  "https://clientbp.ggpolarbear.com",
+    "TH":  "https://clientbp.ggpolarbear.com",
+    "VN":  "https://clientbp.ggpolarbear.com",
+    "BR":  "https://client.us.freefiremobile.com",
+    "NA":  "https://client.us.freefiremobile.com",
+    "SA":  "https://client.us.freefiremobile.com",
+    "ME":  "https://clientbp.ggpolarbear.com",
+    "PK":  "https://clientbp.ggpolarbear.com",
+}
 
 # =====================================================================
 
@@ -103,18 +131,199 @@ def join_markup():
     return mk
 
 
-def call_api(region, uid):
-    url = LIKE_API_URL.format(uid=uid, region=region)
+# ─── AES ENCRYPTION (matching game client) ──────────────────────────
+def encrypt_aes(data: bytes) -> str:
+    key = b'Yg&tc%DEuh6%Zc^8'
+    iv  = b'6oyZDr22E3ychjM%'
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    return binascii.hexlify(cipher.encrypt(pad(data, AES.block_size))).decode()
+
+# ─── PROTOBUF ENCODING (manual) ─────────────────────────────────────
+def _varint(value):
+    r = b''
+    while value > 0x7F:
+        r += bytes([(value & 0x7F) | 0x80]); value >>= 7
+    return r + bytes([value & 0x7F])
+
+def _proto_varint(fnum, val):
+    return bytes([(fnum << 3) | 0]) + _varint(val)
+
+def _proto_string(fnum, val):
+    d = val.encode() if isinstance(val, str) else val
+    return bytes([(fnum << 3) | 2]) + _varint(len(d)) + d
+
+def build_like_proto(uid, region):
+    return _proto_varint(1, int(uid)) + _proto_string(2, region)
+
+def build_uid_proto(uid):
+    return _proto_varint(1, int(uid)) + _proto_varint(2, 1)
+
+# ─── GAME REQUEST HEADERS ────────────────────────────────────────────
+def game_headers(token):
+    return {
+        'User-Agent':      'Dalvik/2.1.0 (Linux; U; Android 9; ASUS_Z01QD Build/PI)',
+        'Connection':      'Keep-Alive',
+        'Accept-Encoding': 'gzip',
+        'Authorization':   f'Bearer {token}',
+        'Content-Type':    'application/x-www-form-urlencoded',
+        'X-Unity-Version': '2018.4.11f1',
+        'X-GA':            'v1 1',
+        'ReleaseVersion':  'OB53',
+    }
+
+# ─── GET PLAYER INFO ─────────────────────────────────────────────────
+def get_player_info(uid, region):
+    """Get player nickname and likes count from game server."""
+    server = GAME_SERVERS.get(region, GAME_SERVERS["IND"])
+    url    = f"{server}/GetPlayerPersonalShow"
+    enc    = bytes.fromhex(encrypt_aes(build_uid_proto(uid)))
+    token  = FF_TOKENS[0]
+
     try:
-        r = requests.get(url, timeout=20)
-        if r.status_code != 200:
-            return {"error": "Max likes reached or server error. Try tomorrow."}
-        return r.json()
-    except requests.RequestException as e:
-        logger.error(f"API error: {e}")
-        return {"error": "API failed. Please try again later."}
-    except ValueError:
-        return {"error": "Invalid API response."}
+        r = requests.post(url, data=enc, headers=game_headers(token),
+                         timeout=15, verify=False)
+        if r.status_code == 200 and r.content:
+            return parse_player_info(r.content)
+    except Exception as e:
+        logger.error(f"get_player_info error: {e}")
+    return None
+
+def parse_player_info(data):
+    """Parse protobuf binary to extract player info."""
+    try:
+        info = {}
+        i = 0
+        while i < len(data):
+            if i >= len(data): break
+            tag = data[i]; i += 1
+            fnum = tag >> 3
+            wtype = tag & 0x7
+
+            if wtype == 0:  # varint
+                val, shift = 0, 0
+                while i < len(data):
+                    b = data[i]; i += 1
+                    val |= (b & 0x7F) << shift
+                    if not (b & 0x80): break
+                    shift += 7
+                if fnum == 1: info['UID'] = val
+                elif fnum == 5: info['Likes'] = val
+            elif wtype == 2:  # length-delimited
+                length, shift = 0, 0
+                while i < len(data):
+                    b = data[i]; i += 1
+                    length |= (b & 0x7F) << shift
+                    if not (b & 0x80): break
+                    shift += 7
+                val = data[i:i+length]; i += length
+                # Field 10 = AccountInfo (embedded message)
+                if fnum == 10:
+                    info.update(parse_account_info(val))
+                elif fnum == 2:
+                    try: info['PlayerNickname'] = val.decode('utf-8', errors='ignore')
+                    except: pass
+            else:
+                break
+        return info if info else None
+    except Exception as e:
+        logger.error(f"parse_player_info error: {e}")
+        return None
+
+def parse_account_info(data):
+    """Parse inner AccountInfo protobuf."""
+    info = {}
+    i = 0
+    try:
+        while i < len(data):
+            tag = data[i]; i += 1
+            fnum = tag >> 3
+            wtype = tag & 0x7
+            if wtype == 0:
+                val, shift = 0, 0
+                while i < len(data):
+                    b = data[i]; i += 1
+                    val |= (b & 0x7F) << shift
+                    if not (b & 0x80): break
+                    shift += 7
+                if fnum == 1: info['UID'] = val
+                elif fnum == 6: info['Likes'] = val
+            elif wtype == 2:
+                length, shift = 0, 0
+                while i < len(data):
+                    b = data[i]; i += 1
+                    length |= (b & 0x7F) << shift
+                    if not (b & 0x80): break
+                    shift += 7
+                val = data[i:i+length]; i += length
+                if fnum == 2:
+                    try: info['PlayerNickname'] = val.decode('utf-8', errors='ignore')
+                    except: pass
+            else:
+                break
+    except: pass
+    return info
+
+# ─── SEND LIKES (async, one per token) ───────────────────────────────
+async def send_single_like(session, url, enc_data, token):
+    try:
+        async with session.post(url, data=enc_data,
+                                headers=game_headers(token), timeout=10) as r:
+            return r.status
+    except:
+        return None
+
+async def send_likes_async(uid, region):
+    server  = GAME_SERVERS.get(region, GAME_SERVERS["IND"])
+    url     = f"{server}/LikeProfile"
+    proto   = build_like_proto(uid, region)
+    enc     = bytes.fromhex(encrypt_aes(proto))
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [send_single_like(session, url, enc, t) for t in FF_TOKENS]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+    return sum(1 for r in results if r == 200)
+
+def call_api(region, uid):
+    """Send likes directly via game server (no external API needed)."""
+    try:
+        # Get player info BEFORE likes
+        before_info = get_player_info(uid, region)
+        if not before_info or 'Likes' not in before_info:
+            return {"error": "Player not found or invalid UID."}
+
+        before_likes = before_info.get('Likes', 0)
+        player_name  = before_info.get('PlayerNickname', 'N/A')
+
+        # Send likes
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    success = pool.submit(asyncio.run, send_likes_async(uid, region)).result()
+            else:
+                success = asyncio.run(send_likes_async(uid, region))
+        except RuntimeError:
+            success = asyncio.run(send_likes_async(uid, region))
+
+        # Get player info AFTER likes
+        time.sleep(1)
+        after_info   = get_player_info(uid, region)
+        after_likes  = after_info.get('Likes', before_likes) if after_info else before_likes
+        likes_given  = after_likes - before_likes
+
+        return {
+            "status": 1 if likes_given > 0 else 2,
+            "UID": int(uid),
+            "PlayerNickname": player_name,
+            "Region": region,
+            "LikesbeforeCommand": before_likes,
+            "LikesafterCommand": after_likes,
+            "LikesGivenByAPI": likes_given,
+        }
+    except Exception as e:
+        logger.error(f"call_api error: {e}")
+        return {"error": f"Failed: {str(e)}"}
 
 
 def get_limit(user_id):
