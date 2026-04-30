@@ -519,11 +519,11 @@ def process_like(msg, region, ff_uid):
         _edit(wait_msg, f"⚠️ *Error:*\n{data['error']}")
         return
 
-    if not isinstance(data, dict) or data.get("status") != 1:
+    if not isinstance(data, dict) or data.get("status") not in [1, 2]:
         _edit(wait_msg,
             "❌ *Failed!*\n\n"
-            "This UID has already received max likes today.\n"
-            "Try after *24 hours* or use a different UID.")
+            "Could not process this request.\n"
+            "Try again later or contact support.")
         return
 
     # ─── Success ──────────────────────────────────────────────────
