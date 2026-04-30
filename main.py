@@ -183,57 +183,24 @@ def get_player_info(uid, region):
         r = requests.post(url, data=enc, headers=game_headers(token),
                          timeout=15, verify=False)
         if r.status_code == 200 and r.content:
-            # Skip 4-byte header from game server response
-            raw = r.content[4:] if len(r.content) > 4 else r.content
-            return parse_player_info(raw)
+            return parse_player_info(r.content)
     except Exception as e:
         logger.error(f"get_player_info error: {e}")
     return None
 
-def parse_player_info(data):
-    """Parse protobuf binary to extract player info."""
-    try:
-        info = {}
-        i = 0
-        while i < len(data):
-            if i >= len(data): break
-            tag = data[i]; i += 1
-            fnum = tag >> 3
-            wtype = tag & 0x7
+def _read_varint(data, i):
+    """Read a varint from data at position i. Returns (value, new_i)."""
+    val, shift = 0, 0
+    while i < len(data):
+        b = data[i]; i += 1
+        val |= (b & 0x7F) << shift
+        if not (b & 0x80): break
+        shift += 7
+    return val, i
 
-            if wtype == 0:  # varint
-                val, shift = 0, 0
-                while i < len(data):
-                    b = data[i]; i += 1
-                    val |= (b & 0x7F) << shift
-                    if not (b & 0x80): break
-                    shift += 7
-                if fnum == 1: info['UID'] = val
-                elif fnum == 5: info['Likes'] = val
-            elif wtype == 2:  # length-delimited
-                length, shift = 0, 0
-                while i < len(data):
-                    b = data[i]; i += 1
-                    length |= (b & 0x7F) << shift
-                    if not (b & 0x80): break
-                    shift += 7
-                val = data[i:i+length]; i += length
-                # Field 10 = AccountInfo (embedded message)
-                if fnum == 10:
-                    info.update(parse_account_info(val))
-                elif fnum == 2:
-                    try: info['PlayerNickname'] = val.decode('utf-8', errors='ignore')
-                    except: pass
-            else:
-                break
-        return info if info else None
-    except Exception as e:
-        logger.error(f"parse_player_info error: {e}")
-        return None
-
-def parse_account_info(data):
-    """Parse inner AccountInfo protobuf."""
-    info = {}
+def _parse_proto_flat(data):
+    """Flatten parse a protobuf message, return dict of {field_num: [values]}."""
+    fields = {}
     i = 0
     try:
         while i < len(data):
@@ -241,29 +208,65 @@ def parse_account_info(data):
             fnum = tag >> 3
             wtype = tag & 0x7
             if wtype == 0:
-                val, shift = 0, 0
-                while i < len(data):
-                    b = data[i]; i += 1
-                    val |= (b & 0x7F) << shift
-                    if not (b & 0x80): break
-                    shift += 7
-                if fnum == 1: info['UID'] = val
-                elif fnum == 6: info['Likes'] = val
+                val, i = _read_varint(data, i)
+                fields.setdefault(fnum, []).append(val)
             elif wtype == 2:
-                length, shift = 0, 0
-                while i < len(data):
-                    b = data[i]; i += 1
-                    length |= (b & 0x7F) << shift
-                    if not (b & 0x80): break
-                    shift += 7
+                length, i = _read_varint(data, i)
                 val = data[i:i+length]; i += length
-                if fnum == 2:
-                    try: info['PlayerNickname'] = val.decode('utf-8', errors='ignore')
-                    except: pass
+                fields.setdefault(fnum, []).append(val)
+            elif wtype == 5:
+                fields.setdefault(fnum, []).append(data[i:i+4]); i += 4
             else:
                 break
     except: pass
-    return info
+    return fields
+
+def parse_player_info(data):
+    """
+    Parse game server GetPlayerPersonalShow response.
+    Response structure: field 1 = outer wrapper (len-delimited)
+    Inside: field 1=UID(varint), field 3=Nickname(string), field 5=Region,
+            field 7=Likes(varint), field 8=Level, etc.
+    """
+    try:
+        outer = _parse_proto_flat(data)
+        info  = {}
+
+        # The main player data is in field 1 (the outer AccountInfo wrapper)
+        if 1 in outer:
+            inner_data = outer[1][0]  # bytes of nested message
+            inner = _parse_proto_flat(inner_data)
+
+            # field 1 = UID
+            if 1 in inner: info['UID']  = inner[1][0]
+            # field 3 = Nickname (string bytes)
+            if 3 in inner:
+                try: info['PlayerNickname'] = inner[3][0].decode('utf-8', errors='ignore')
+                except: pass
+            # field 5 = Region
+            if 5 in inner:
+                try: info['Region'] = inner[5][0].decode('utf-8', errors='ignore')
+                except: pass
+            # field 7 = Likes count
+            if 7 in inner: info['Likes'] = inner[7][0]
+            # Fallback: field 6
+            if 'Likes' not in info and 6 in inner: info['Likes'] = inner[6][0]
+
+        # Also check top-level fields as fallback
+        if 'Likes' not in info:
+            for f in [5, 6, 7, 8]:
+                if f in outer and isinstance(outer[f][0], int) and outer[f][0] > 0:
+                    info['Likes'] = outer[f][0]; break
+
+        # Ensure Likes exists (even if 0)
+        if 'Likes' not in info: info['Likes'] = 0
+        if 'PlayerNickname' not in info: info['PlayerNickname'] = 'Unknown'
+
+        logger.info(f"Parsed player: {info}")
+        return info if info else None
+    except Exception as e:
+        logger.error(f"parse_player_info error: {e}")
+        return None
 
 # ─── SEND LIKES (async, one per token) ───────────────────────────────
 async def send_single_like(session, url, enc_data, token):
