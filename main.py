@@ -431,19 +431,29 @@ def catch_all(msg):
 # =====================================================================
 
 def run():
+    port = int(os.environ.get("PORT", 10000))
+
     if WEBHOOK_URL:
+        # Webhook mode — Render pings our Flask server
         full_url = f"{WEBHOOK_URL.rstrip('/')}/{BOT_TOKEN}"
         bot.remove_webhook()
         time.sleep(0.5)
         bot.set_webhook(url=full_url)
-        logger.info(f"✅ Webhook → {full_url}")
-        port = int(os.environ.get("PORT", 10000))
+        logger.info(f"✅ Webhook mode → {full_url}")
         app.run(host="0.0.0.0", port=port)
     else:
+        # Polling mode — Flask runs in background (for Render port health check)
         bot.remove_webhook()
+        flask_thread = threading.Thread(
+            target=lambda: app.run(host="0.0.0.0", port=port),
+            daemon=True
+        )
+        flask_thread.start()
+        logger.info(f"🌐 Flask health server started on port {port}")
         logger.info("🤖 Polling mode started — @nxtlikebot")
         bot.infinity_polling(skip_pending=True)
 
 
 if __name__ == "__main__":
     run()
+
