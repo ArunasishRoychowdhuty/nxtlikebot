@@ -382,15 +382,20 @@ def get_player_info(uid, region):
     server = GAME_SERVERS.get(region, GAME_SERVERS["IND"])
     url    = f"{server}/GetPlayerPersonalShow"
     enc    = bytes.fromhex(encrypt_aes(build_uid_proto(uid)))
-    token  = FF_TOKENS[0]
-
-    try:
-        r = requests.post(url, data=enc, headers=game_headers(token),
-                         timeout=15, verify=False)
-        if r.status_code == 200 and r.content:
-            return parse_player_info(r.content)
-    except Exception as e:
-        logger.error(f"get_player_info error: {e}")
+    
+    import random
+    tokens_to_try = random.sample(FF_TOKENS, min(5, len(FF_TOKENS))) if FF_TOKENS else []
+    
+    for token in tokens_to_try:
+        try:
+            r = requests.post(url, data=enc, headers=game_headers(token),
+                              timeout=10, verify=False)
+            if r.status_code == 200 and r.content:
+                info = parse_player_info(r.content)
+                if info and 'Likes' in info:
+                    return info
+        except Exception as e:
+            logger.error(f"get_player_info error: {e}")
     return None
 
 def _read_varint(data, i):
