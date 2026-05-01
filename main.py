@@ -401,7 +401,7 @@ def _parse_proto_flat(data):
     i = 0
     try:
         while i < len(data):
-            tag = data[i]; i += 1
+            tag, i = _read_varint(data, i)
             fnum = tag >> 3
             wtype = tag & 0x7
             if wtype == 0:
@@ -413,6 +413,8 @@ def _parse_proto_flat(data):
                 fields.setdefault(fnum, []).append(val)
             elif wtype == 5:
                 fields.setdefault(fnum, []).append(data[i:i+4]); i += 4
+            elif wtype == 1:
+                fields.setdefault(fnum, []).append(data[i:i+8]); i += 8
             else:
                 break
     except: pass
@@ -444,8 +446,9 @@ def parse_player_info(data):
             if 5 in inner:
                 try: info['Region'] = inner[5][0].decode('utf-8', errors='ignore')
                 except: pass
-            # field 7 = Likes count
-            if 7 in inner: info['Likes'] = inner[7][0]
+            # field 21 = Likes count (in new OB version)
+            if 21 in inner: info['Likes'] = inner[21][0]
+            elif 7 in inner: info['Likes'] = inner[7][0]
             # Fallback: field 6
             if 'Likes' not in info and 6 in inner: info['Likes'] = inner[6][0]
 
